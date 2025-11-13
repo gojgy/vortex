@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vortex Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+    <style>
+        :root {
+            --custom-purple: #8a2be2;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        section {
+            margin-bottom: 2rem;
+        }
+
+        .kpi-card {
+            text-align: center;
+        }
+
+        .kpi-card h2 {
+            font-size: 2.5em;
+            margin-bottom: 0;
+            color: var(--custom-purple);
+        }
+
+        .kpi-card p {
+            margin-top: 0;
+        }
+
+        .chart-container {
+            position: relative;
+        }
+
+        .empty-state-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--muted-color);
+            display: none;
+        }
+
+        .main-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0;
+        }
+
+        .main-header h1 {
+            margin-bottom: 0;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        #reload-status {
+            font-size: 0.9em;
+            min-width: 150px;
+            text-align: left;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+        }
+
+        #reload-status.visible {
+            opacity: 1;
+        }
+
+        #reload-status.success {
+            color: var(--pico-color-green-500);
+        }
+
+        #reload-status.error {
+            color: var(--pico-color-red-500);
+        }
+    </style>
+</head>
+
+<body>
+    <main class="container">
+        <header>
+            <div class="main-header">
+                <h1>Vortex Dashboard</h1>
+                <div class="header-controls">
+                    <span id="reload-status"></span>
+                    <button id="reload-button" class="secondary outline small">Reload Config</button>
+                </div>
+            </div>
+            <p>Last Updated: <span id="last-updated">...</span></p>
+        </header>
+
+        <section class="grid">
+            <article class="kpi-card">
+                <h2 id="total-requests">...</h2>
+                <p>Total Requests</p>
+            </article>
+            <article class="kpi-card">
+                <h2 id="avg-latency">... ms</h2>
+                <p>Average Latency</p>
+            </article>
+        </section>
+
+        <section class="grid">
+            <article>
+                <h3>Status Codes</h3>
+                <div class="chart-container"> <canvas id="status-codes-chart"></canvas>
+                    <p id="status-codes-chart-empty" class="empty-state-message">No data available</p>
+                </div>
+            </article>
+            <article>
+                <h3>Requests by Location</h3>
+                <div class="chart-container"> <canvas id="requests-by-location-chart"></canvas>
+                    <p id="requests-by-location-chart-empty" class="empty-state-message">No data available</p>
+                </div>
+            </article>
+            <article>
+                <h3>Upstream Load</h3>
+                <div class="chart-container"> <canvas id="upstream-load-chart"></canvas>
+                    <p id="upstream-load-chart-empty" class="empty-state-message">No data available</p>
+                </div>
+            </article>
+            <article>
+                <h3>Latency by Location</h3>
+                <div class="chart-container"> <canvas id="latency-by-location-chart"></canvas>
+                    <p id="latency-by-location-chart-empty" class="empty-state-message">No data available</p>
+                </div>
+            </article>
+        </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const UPDATE_INTERVAL_MS = 1000;
+            const UNIQUE_COLOR_PALETTE = [
+                '#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de',
+                '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc'
+            ];
+            function getColorForString(str) {
+                let hash = 0;
+                for (let i = 0; i < str.length; i++) {
+                    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+                    hash |= 0;
+                }
+                const index = Math.abs(hash) % UNIQUE_COLOR_PALETTE.length;
+                return UNIQUE_COLOR_PALETTE[index];
+            }
+            function getColorForStatusCode(code) {
+                const family = Math.floor(code / 100);
+                const variation = code % 100;
+                const baseHue = { 2: 120, 3: 210, 4: 40, 5: 0 }[family] || 270;
+                const lightness = 45 + (variation / 99) * 20;
+                return `hsl(${baseHue}, 70%, ${lightness}%)`;
+            }
+            const chartContexts = {
+                statusCodes: document.getElementById('status-codes-chart').getContext('2d'),
+                requestsByLocation: document.getElementById('requests-by-location-chart').getContext('2d'),
+                upstreamLoad: document.getElementById('upstream-load-chart').getContext('2d'),
+                latencyByLocation: document.getElementById('latency-by-location-chart').getContext('2d'),
+            };
+            const charts = {
+                statusCodes: new Chart(chartContexts.statusCodes, { type: 'pie', data: {}, options: { responsive: true } }),
+                requestsByLocation: new Chart(chartContexts.requestsByLocation, { type: 'bar', data: {}, options: { responsive: true, indexAxis: 'y' } }),
+                upstreamLoad: new Chart(chartContexts.upstreamLoad, { type: 'bar', data: {}, options: { responsive: true, indexAxis: 'y' } }),
+                latencyByLocation: new Chart(chartContexts.latencyByLocation, { type: 'bar', data: {}, options: { responsive: true, indexAxis: 'y' } }),
+            };
+            function toggleEmptyState(chartId, isEmpty) {
+                document.getElementById(chartId).style.display = isEmpty ? 'none' : 'block';
+                document.getElementById(`${chartId}-empty`).style.display = isEmpty ? 'block' : 'none';
+            }
+            function parsePrometheusText(text) {
+                const metrics = {};
+                text.split('\n').forEach(line => {
+                    if (line.startsWith('#') || line.trim() === '') return;
+                    const [nameAndLabels, value] = line.split(' ');
+                    const name = nameAndLabels.split('{')[0];
+                    if (!metrics[name]) metrics[name] = [];
+                    const labels = {};
+                    const labelMatch = nameAndLabels.match(/{([^}]+)}/);
+                    if (labelMatch) {
+                        labelMatch[1].split(',').forEach(labelPair => {
+                            const [key, val] = labelPair.split('=');
+                            labels[key] = val.slice(1, -1);
+                        });
+                    }
+                    metrics[name].push({ labels, value: parseFloat(value) });
+                });
+                return metrics;
+            }
+            async function updateDashboard() {
+                try {
+                    const response = await fetch('/metrics');
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    const text = await response.text();
+                    const allMetrics = parsePrometheusText(text);
+                    const totalRequestsData = allMetrics['vortex_http_requests_total'] || [];
+                    document.getElementById('total-requests').textContent = totalRequestsData.reduce((s, m) => s + m.value, 0).toLocaleString('en-US');
+                    const durationSum = (allMetrics['vortex_http_request_duration_seconds_sum'] || []).reduce((s, m) => s + m.value, 0);
+                    const durationCount = (allMetrics['vortex_http_request_duration_seconds_count'] || []).reduce((s, m) => s + m.value, 0);
+                    document.getElementById('avg-latency').textContent = `${durationCount > 0 ? (durationSum / durationCount * 1000).toFixed(0) : 0} ms`;
+                    const statusCodes = {};
+                    totalRequestsData.forEach(m => { const code = m.labels.code; statusCodes[code] = (statusCodes[code] || 0) + m.value; });
+                    toggleEmptyState('status-codes-chart', Object.keys(statusCodes).length === 0);
+                    charts.statusCodes.data = { labels: Object.keys(statusCodes), datasets: [{ data: Object.values(statusCodes), backgroundColor: Object.keys(statusCodes).map(code => getColorForStatusCode(Number(code))) }] };
+                    charts.statusCodes.update('none');
+                    const requestsByLocation = {};
+                    totalRequestsData.forEach(m => { const loc = m.labels.location; requestsByLocation[loc] = (requestsByLocation[loc] || 0) + m.value; });
+                    toggleEmptyState('requests-by-location-chart', Object.keys(requestsByLocation).length === 0);
+                    charts.requestsByLocation.data = { labels: Object.keys(requestsByLocation), datasets: [{ label: 'Requests', data: Object.values(requestsByLocation), backgroundColor: Object.keys(requestsByLocation).map(loc => getColorForString(loc)) }] };
+                    charts.requestsByLocation.update('none');
+                    const upstreamLoad = {};
+                    (allMetrics['vortex_upstream_requests_total'] || []).forEach(m => { const server = m.labels.server; upstreamLoad[server] = (upstreamLoad[server] || 0) + m.value; });
+                    toggleEmptyState('upstream-load-chart', Object.keys(upstreamLoad).length === 0);
+                    charts.upstreamLoad.data = { labels: Object.keys(upstreamLoad), datasets: [{ label: 'Load', data: Object.values(upstreamLoad), backgroundColor: Object.keys(upstreamLoad).map(server => getColorForString(server)) }] };
+                    charts.upstreamLoad.update('none');
+                    const latencyByLocation = {};
+                    const sums = allMetrics['vortex_http_request_duration_seconds_sum'] || [];
+                    const counts = allMetrics['vortex_http_request_duration_seconds_count'] || [];
+                    sums.forEach(sumMetric => {
+                        const loc = sumMetric.labels.location;
+                        const countMetric = counts.find(c => c.labels.location === loc);
+                        if (countMetric && countMetric.value > 0) { latencyByLocation[loc] = (sumMetric.value / countMetric.value * 1000).toFixed(2); }
+                    });
+                    toggleEmptyState('latency-by-location-chart', Object.keys(latencyByLocation).length === 0);
+                    charts.latencyByLocation.data = { labels: Object.keys(latencyByLocation), datasets: [{ label: 'Latency (ms)', data: Object.values(latencyByLocation), backgroundColor: Object.keys(latencyByLocation).map(loc => getColorForString(loc)) }] };
+                    charts.latencyByLocation.update('none');
+                    document.getElementById('last-updated').textContent = new Date().toLocaleTimeString('en-US');
+                } catch (error) {
+                    console.error('Error updating dashboard:', error);
+                    document.getElementById('last-updated').textContent = `Error!`;
+                }
+            }
+            const reloadButton = document.getElementById('reload-button');
+            const reloadStatus = document.getElementById('reload-status');
+            reloadButton.addEventListener('click', async () => {
+                reloadButton.setAttribute('aria-busy', 'true');
+                reloadButton.disabled = true;
+                reloadStatus.textContent = 'Reloading...';
+                reloadStatus.className = 'visible';
+                try {
+                    const response = await fetch('/-/reload', { method: 'POST' });
+                    if (response.ok) {
+                        reloadStatus.textContent = 'Reload successful!';
+                        reloadStatus.className = 'visible success';
+                    } else {
+                        reloadStatus.textContent = 'Reload failed!';
+                        reloadStatus.className = 'visible error';
+                        console.error('Config reload failed:', await response.text());
+                    }
+                } catch (error) {
+                    reloadStatus.textContent = 'Network error!';
+                    reloadStatus.className = 'visible error';
+                    console.error('Network error during reload:', error);
+                } finally {
+                    reloadButton.removeAttribute('aria-busy');
+                    reloadButton.disabled = false;
+                    setTimeout(() => {
+                        reloadStatus.className = '';
+                    }, 3000);
+                }
+            });
+
+            updateDashboard();
+            setInterval(updateDashboard, UPDATE_INTERVAL_MS);
+        });
+    </script>
+</body>
+
+</html>

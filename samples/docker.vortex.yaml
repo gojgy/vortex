@@ -1,0 +1,36 @@
+server:
+  listen: ":8080"
+
+admin:
+  listen: ":9090"
+
+upstreams:
+  httpbin_cluster:
+    algorithm: round_robin
+    servers:
+      - "httpbin_service_a:80"
+      - "httpbin_service_b:80"
+
+locations:
+  - path: "/"
+    root: "${VORTEX_STATIC_ROOT}"
+
+  - path: "/service-a/"
+    proxy_pass: "http://httpbin_service_a"
+    timeout: 5s
+
+  - path: "/timeout-test/"
+    proxy_pass: "http://httpbin_service_a/delay/3"
+    timeout: 2s
+
+  - path: "/balanced/"
+    proxy_pass: "http://httpbin_cluster/get"
+    timeout: 5s
+    rate_limit:
+      rpm: 10
+      size: 100
+      key: "${remote_addr}"
+    cache:
+      size: 100
+      ttl: 15s
+      key: "${uri}${query}"

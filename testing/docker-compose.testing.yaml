@@ -1,0 +1,30 @@
+services:
+  vortex:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: vortex-demo-proxy
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./vortex.testing.yaml:/app/vortex.testing.yaml
+      - ./static:/app/static
+    environment:
+      - VORTEX_CONFIG_FILE_PATH=/app
+      - VORTEX_CONFIG_FILE_NAME=vortex.testing
+    depends_on:
+      - echo-a
+      - echo-b
+
+  echo-a:
+    build: ../echo-server
+    container_name: echo-a
+    environment:
+      - INSTANCE_ID=echo-a
+
+  echo-b:
+    build: ../echo-server
+    container_name: echo-b
+    environment:
+      - INSTANCE_ID=echo-b

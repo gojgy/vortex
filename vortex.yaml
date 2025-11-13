@@ -1,0 +1,10 @@
+server:
+  listen: ":8080"
+
+admin:
+  listen: ":9090"
+
+locations:
+  - path: "/"
+    root: "${VORTEX_STATIC_ROOT}"
+  

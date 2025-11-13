@@ -1,0 +1,45 @@
+server:
+  listen: ":8080"
+admin:
+  listen: ":9090"
+
+upstreams:
+  echo_cluster:
+    algorithm: round_robin
+    servers:
+      - "echo-a:80"
+      - "echo-b:80"
+
+locations:
+  - path: "/static/"
+    root: "/app/static"
+
+  - path: "/strip/"
+    proxy_pass: "http://echo-a/"
+
+  - path: "/no-strip/"
+    proxy_pass: "http://echo-a"
+
+  - path: "/balanced/"
+    proxy_pass: "http://echo_cluster/get"
+
+  - path: "/cached/"
+    proxy_pass: "http://echo_cluster/cache-test"
+    cache:
+      size: 10
+      ttl: 10s
+      key: "${uri}${query}"
+
+  - path: "/limited/"
+    proxy_pass: "http://echo-a"
+    rate_limit:
+      rpm: 5
+      size: 10
+      key: "${remote_addr}"
+
+  - path: "/timeout/"
+    proxy_pass: "http://echo-a/hold/3"
+    timeout: 2s
+
+  - path: "/"
+    proxy_pass: "http://echo-a/root-path"
